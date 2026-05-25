@@ -44,7 +44,7 @@ concurrency:
 
 env:
   TF_VERSION:   "1.7.5"
-  AWS_REGION:   ${{ secrets.AWS_REGION }}
+  AWS_REGION:   ${{ secrets.AWS_REGION || 'us-east-1' }}
   ENVIRONMENT:  ${{ github.ref == 'refs/heads/main' && 'dev' || 'dev' }}
   # Override ENVIRONMENT per branch in a multi-env setup:
   #   main → dev, release/* → staging, tags/v* → prod
@@ -182,7 +182,7 @@ jobs:
       github.ref == 'refs/heads/main' &&
       github.event_name == 'push'   &&
       needs.plan.outputs.plan_exit_code == '2'
-    environment: ${{ env.ENVIRONMENT }}   # requires manual approval in prod
+    environment: dev
 
     steps:
       - name: Checkout repository
