@@ -28,7 +28,7 @@ per group.
 import sys
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 
 from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
