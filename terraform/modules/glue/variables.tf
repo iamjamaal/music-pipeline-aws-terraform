@@ -1,0 +1,9 @@
+variable "environment"       { type = string }
+variable "glue_role_arn"     { type = string }
+variable "scripts_bucket"    { type = string }
+variable "raw_bucket"        { type = string }
+variable "archive_bucket"    { type = string }
+variable "songs_table"       { type = string }
+variable "genre_kpis_table"  { type = string }
+variable "top_songs_table"   { type = string }
+variable "top_genres_table"  { type = string }

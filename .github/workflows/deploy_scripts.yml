@@ -1,0 +1,148 @@
+# ============================================================
+# Workflow: Deploy Glue Scripts to S3
+# ============================================================
+# This workflow is intentionally separate from the Terraform
+# workflow for a key reason: Glue job Python scripts change far
+# more frequently than infrastructure.  Separating them means
+# a hot-fix to validate.py doesn't trigger a full Terraform
+# plan+apply cycle (which can take 3-5 minutes).
+#
+# Trigger conditions
+# ──────────────────
+# • Any push to main that modifies files under glue_jobs/
+# • Manual trigger (workflow_dispatch) so engineers can redeploy
+#   a specific script without touching other files – useful when
+#   a hot-fix needs to go to prod immediately.
+#
+# Deployment strategy
+# ───────────────────
+# We use `aws s3 sync` rather than individual `cp` commands.
+# sync only uploads files whose content has changed (based on
+# size + MD5 ETag), so redeployments are fast and idempotent.
+# The --delete flag is intentionally OMITTED to prevent accidental
+# deletion of scripts that are in use by running Glue jobs.
+#
+# After uploading, the workflow fetches the Terraform outputs
+# from the most recent apply artifact to know the exact bucket
+# name.  This avoids hard-coding bucket names in the workflow.
+
+name: "Deploy Glue Scripts"
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "glue_jobs/**"
+      - ".github/workflows/deploy_scripts.yml"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment (dev | staging | prod)"
+        required: true
+        default: "dev"
+        type: choice
+        options: [ "dev", "staging", "prod" ]
+
+concurrency:
+  group: deploy-scripts-${{ github.ref }}
+  cancel-in-progress: true   # a newer push supersedes an in-flight deploy
+
+env:
+  AWS_REGION:  ${{ secrets.AWS_REGION }}
+  ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Job: Lint Python scripts ────────────────────────────
+  lint:
+    name: "Lint Glue Scripts"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install linting tools
+        run: pip install flake8 pylint boto3 pyarrow awsglue-local 2>/dev/null || pip install flake8 pylint boto3 pyarrow
+
+      - name: flake8 – style and syntax
+        # E501: line-length – we allow 120 chars for readability in ETL scripts
+        # W503: line break before binary operator – conflicts with Black style
+        run: |
+          flake8 glue_jobs/ \
+            --max-line-length=120 \
+            --extend-ignore=E501,W503 \
+            --statistics
+
+      - name: Compile check (py_compile)
+        # Catches syntax errors that flake8 might miss in edge cases
+        run: |
+          python -m py_compile glue_jobs/validate.py
+          python -m py_compile glue_jobs/transform.py
+          python -m py_compile glue_jobs/ingest.py
+          python -m py_compile glue_jobs/archive.py
+          echo "All scripts compiled successfully."
+
+  # ── Job: Upload to S3 ───────────────────────────────────
+  upload:
+    name: "Upload Scripts to S3"
+    runs-on: ubuntu-latest
+    needs: lint
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:      ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key:  ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:             ${{ env.AWS_REGION }}
+
+      - name: Resolve scripts bucket name
+        id: bucket
+        # The scripts bucket name embeds a random suffix set at Terraform apply
+        # time.  We resolve it from SSM Parameter Store (written by Terraform)
+        # rather than hard-coding it.  If SSM is not set up yet, fall back to
+        # the predictable naming convention.
+        run: |
+          BUCKET=$(aws ssm get-parameter \
+            --name "/music-pipeline/${{ env.ENVIRONMENT }}/scripts_bucket" \
+            --query "Parameter.Value" \
+            --output text 2>/dev/null) || \
+          BUCKET=$(aws s3 ls | grep "music-pipeline-scripts-${{ env.ENVIRONMENT }}" | awk '{print $3}')
+          echo "bucket=${BUCKET}" >> $GITHUB_OUTPUT
+          echo "Resolved scripts bucket: ${BUCKET}"
+
+      - name: Sync Glue scripts to S3
+        run: |
+          aws s3 sync glue_jobs/ \
+            s3://${{ steps.bucket.outputs.bucket }}/glue_jobs/ \
+            --exclude "*.pyc" \
+            --exclude "__pycache__/*" \
+            --exclude ".DS_Store" \
+            --sse AES256 \
+            --no-progress
+          echo "Scripts uploaded successfully."
+
+      - name: Verify upload
+        run: |
+          echo "=== Scripts now in S3 ==="
+          aws s3 ls s3://${{ steps.bucket.outputs.bucket }}/glue_jobs/ --human-readable
+
+      - name: Summarise deployment
+        run: |
+          echo "### Glue Scripts Deployed" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** ${{ env.ENVIRONMENT }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Bucket:** ${{ steps.bucket.outputs.bucket }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Scripts:**" >> $GITHUB_STEP_SUMMARY
+          for f in glue_jobs/*.py; do echo "  - \`$(basename $f)\`" >> $GITHUB_STEP_SUMMARY; done

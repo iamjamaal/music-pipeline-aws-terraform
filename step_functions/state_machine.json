@@ -1,0 +1,186 @@
+{
+  "Comment": "Music Streaming Data Pipeline – orchestrates Validate → Transform → Ingest → Archive with full error handling and retry logic.",
+  "StartAt": "ValidateInput",
+  "States": {
+    "ValidateInput": {
+      "Type": "Task",
+      "Comment": "Python Shell Glue job checks all required columns exist before spending Spark resources on transformation.",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "${validate_job_name}",
+        "Arguments": {
+          "--raw_bucket.$":   "$.raw_bucket",
+          "--file_key.$":     "$.file_key",
+          "--execution_id.$": "$$.Execution.Name"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["Glue.ConcurrentRunsExceededException"],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "NotifyValidationFailure",
+          "ResultPath": "$.error"
+        }
+      ],
+      "ResultPath": "$.validate_result",
+      "Next": "TransformData"
+    },
+    "NotifyValidationFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${sns_topic_arn}",
+        "Subject": "Music Pipeline – Validation FAILED",
+        "Message.$": "States.Format('Execution {} failed validation. Error: {}', $$.Execution.Name, $.error.Cause)"
+      },
+      "Next": "PipelineFailed"
+    },
+    "TransformData": {
+      "Type": "Task",
+      "Comment": "PySpark Glue job joins streams + songs catalog, computes daily genre KPIs, top-3 songs, and top-5 genres. Output written as Parquet to S3.",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "${transform_job_name}",
+        "Arguments": {
+          "--raw_bucket.$":   "$.raw_bucket",
+          "--file_key.$":     "$.file_key",
+          "--execution_id.$": "$$.Execution.Name",
+          "--output_prefix":  "transformed/"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["Glue.ConcurrentRunsExceededException"],
+          "IntervalSeconds": 60,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        },
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 1,
+          "BackoffRate": 1
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "NotifyTransformFailure",
+          "ResultPath": "$.error"
+        }
+      ],
+      "ResultPath": "$.transform_result",
+      "Next": "IngestToDynamoDB"
+    },
+    "NotifyTransformFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${sns_topic_arn}",
+        "Subject": "Music Pipeline – Transform FAILED",
+        "Message.$": "States.Format('Execution {} failed during transformation. Error: {}', $$.Execution.Name, $.error.Cause)"
+      },
+      "Next": "PipelineFailed"
+    },
+    "IngestToDynamoDB": {
+      "Type": "Task",
+      "Comment": "Python Shell job reads Parquet output from Transform and performs batched DynamoDB writes for all three KPI table shapes.",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "${ingest_job_name}",
+        "Arguments": {
+          "--raw_bucket.$":       "$.raw_bucket",
+          "--execution_id.$":     "$$.Execution.Name",
+          "--genre_kpis_table":   "music-pipeline-${environment}-genre-kpis",
+          "--top_songs_table":    "music-pipeline-${environment}-top-songs",
+          "--top_genres_table":   "music-pipeline-${environment}-top-genres"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["Glue.ConcurrentRunsExceededException", "States.TaskFailed"],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 3,
+          "BackoffRate": 1.5
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "NotifyIngestFailure",
+          "ResultPath": "$.error"
+        }
+      ],
+      "ResultPath": "$.ingest_result",
+      "Next": "ArchiveFiles"
+    },
+    "NotifyIngestFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${sns_topic_arn}",
+        "Subject": "Music Pipeline – DynamoDB Ingest FAILED",
+        "Message.$": "States.Format('Execution {} failed during DynamoDB ingestion. Error: {}', $$.Execution.Name, $.error.Cause)"
+      },
+      "Next": "PipelineFailed"
+    },
+    "ArchiveFiles": {
+      "Type": "Task",
+      "Comment": "Moves processed CSV files from raw/streams/ to archive/streams/ so the same file is never re-processed.",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "${archive_job_name}",
+        "Arguments": {
+          "--raw_bucket.$":     "$.raw_bucket",
+          "--archive_bucket":   "${archive_bucket}",
+          "--file_key.$":       "$.file_key",
+          "--execution_id.$":   "$$.Execution.Name"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 15,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "NotifyArchiveFailure",
+          "ResultPath": "$.error"
+        }
+      ],
+      "ResultPath": "$.archive_result",
+      "Next": "PipelineSucceeded"
+    },
+    "NotifyArchiveFailure": {
+      "Type": "Task",
+      "Comment": "Archive failure is non-critical (data is already in DynamoDB) but must be alerted so the raw file is manually cleaned up.",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${sns_topic_arn}",
+        "Subject": "Music Pipeline – Archive WARNING (data already safe in DynamoDB)",
+        "Message.$": "States.Format('Execution {} completed but file archival failed. Raw file may be reprocessed. Error: {}', $$.Execution.Name, $.error.Cause)"
+      },
+      "Next": "PipelineSucceeded"
+    },
+    "PipelineSucceeded": {
+      "Type": "Succeed",
+      "Comment": "All four stages completed. KPIs are live in DynamoDB."
+    },
+    "PipelineFailed": {
+      "Type": "Fail",
+      "Error": "PipelineError",
+      "Cause": "One or more pipeline stages failed. Check CloudWatch Logs for details."
+    }
+  }
+}
