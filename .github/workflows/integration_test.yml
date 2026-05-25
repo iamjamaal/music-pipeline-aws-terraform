@@ -34,7 +34,7 @@ on:
         default: "dev"
 
 env:
-  AWS_REGION:  ${{ secrets.AWS_REGION }}
+  AWS_REGION:  ${{ secrets.AWS_REGION || 'us-east-1' }}
   ENVIRONMENT: "dev"
 
 permissions:
@@ -83,7 +83,7 @@ jobs:
         run: |
           TEST_KEY="streams/test_integration_${{ github.run_id }}.csv"
           # Use a small 100-row sample to keep the smoke test fast
-          head -101 streams1.csv > /tmp/test_stream.csv
+          head -101 streams/streams1.csv > /tmp/test_stream.csv
           aws s3 cp /tmp/test_stream.csv \
             s3://${{ steps.resources.outputs.raw_bucket }}/${TEST_KEY} \
             --sse AES256
@@ -96,19 +96,7 @@ jobs:
           EXEC_ARN=$(aws stepfunctions start-execution \
             --state-machine-arn "${{ steps.resources.outputs.sfn_arn }}" \
             --name "ci-smoke-${{ github.run_id }}" \
-            --input '{
-              "raw_bucket":        "${{ steps.resources.outputs.raw_bucket }}",
-              "file_key":          "${{ steps.upload.outputs.test_key }}",
-              "archive_bucket":    "'"$(aws s3 ls | grep music-pipeline-archive-${{ env.ENVIRONMENT }} | awk '{print $3}')"'",
-              "validate_job_name": "music-pipeline-validate-${{ env.ENVIRONMENT }}",
-              "transform_job_name":"music-pipeline-transform-${{ env.ENVIRONMENT }}",
-              "ingest_job_name":   "music-pipeline-ingest-${{ env.ENVIRONMENT }}",
-              "archive_job_name":  "music-pipeline-archive-${{ env.ENVIRONMENT }}",
-              "genre_kpis_table":  "${{ steps.resources.outputs.genre_table }}",
-              "top_songs_table":   "music-pipeline-${{ env.ENVIRONMENT }}-top-songs",
-              "top_genres_table":  "music-pipeline-${{ env.ENVIRONMENT }}-top-genres",
-              "sns_topic_arn":     "arn:aws:sns:${{ env.AWS_REGION }}:${{ secrets.AWS_ACCOUNT_ID }}:music-pipeline-alerts-${{ env.ENVIRONMENT }}"
-            }' \
+            --input "{\"raw_bucket\":\"${{ steps.resources.outputs.raw_bucket }}\",\"file_key\":\"${{ steps.upload.outputs.test_key }}\"}" \
             --query "executionArn" --output text)
           echo "execution_arn=${EXEC_ARN}" >> $GITHUB_OUTPUT
           echo "Started execution: ${EXEC_ARN}"
