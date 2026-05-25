@@ -148,7 +148,7 @@ Stores the top 5 genres per day. Simple to query — give me the date, get back 
 
 ### Prerequisites
 
-You need the AWS CLI configured with credentials that have permissions to create S3, DynamoDB, IAM, Glue, Step Functions, EventBridge, and CloudWatch resources. Terraform 1.6+ must be installed locally.
+You need the AWS CLI configured with credentials that have permissions to create S3, DynamoDB, IAM, Glue, Step Functions, EventBridge, and CloudWatch resources. Terraform 1.10+ must be installed locally.
 
 ### Step 1: Bootstrap the Terraform state backend
 
@@ -235,23 +235,16 @@ Create a GitHub Environment named `prod` under Settings → Environments and con
 
 ### Trigger via AWS Console
 
-Navigate to **Step Functions → State machines → music-pipeline-dev → Start execution** and paste the following JSON as input, replacing the values with your actual resource names:
+Navigate to **Step Functions → State machines → music-pipeline-dev → Start execution** and paste the following JSON as input:
 
 ```json
 {
-  "raw_bucket":         "music-pipeline-raw-dev-{your-suffix}",
-  "file_key":           "streams/streams1.csv",
-  "archive_bucket":     "music-pipeline-archive-dev-{your-suffix}",
-  "validate_job_name":  "music-pipeline-validate-dev",
-  "transform_job_name": "music-pipeline-transform-dev",
-  "ingest_job_name":    "music-pipeline-ingest-dev",
-  "archive_job_name":   "music-pipeline-archive-dev",
-  "genre_kpis_table":   "music-pipeline-dev-genre-kpis",
-  "top_songs_table":    "music-pipeline-dev-top-songs",
-  "top_genres_table":   "music-pipeline-dev-top-genres",
-  "sns_topic_arn":      "arn:aws:sns:us-east-1:{account-id}:music-pipeline-alerts-dev"
+  "raw_bucket": "music-pipeline-raw-dev-{your-suffix}",
+  "file_key":   "streams/streams1.csv"
 }
 ```
+
+All other parameters (job names, table names, SNS ARN) are baked into the state machine definition by Terraform and do not need to be supplied at execution time.
 
 ### Trigger via AWS CLI
 
@@ -263,7 +256,7 @@ aws s3 cp streams1.csv s3://${RAW_BUCKET}/streams/streams1.csv
 aws stepfunctions start-execution \
   --state-machine-arn ${STATE_MACHINE_ARN} \
   --name "manual-run-$(date +%s)" \
-  --input file://scripts/sample_input.json
+  --input "{\"raw_bucket\":\"${RAW_BUCKET}\",\"file_key\":\"streams/streams1.csv\"}"
 ```
 
 ---
