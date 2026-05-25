@@ -135,6 +135,35 @@ resource "aws_glue_job" "archive" {
   tags = { Stage = "archive" }
 }
 
+# ── Job 5: Catalog Ingest ───────────────────────────────────
+# Python Shell: loads songs.csv into the songs-catalog DynamoDB table.
+# Idempotent: skips if the table already has >= 1000 items.
+resource "aws_glue_job" "catalog_ingest" {
+  name         = "${local.prefix}-catalog-ingest-${var.environment}"
+  role_arn     = var.glue_role_arn
+  glue_version = "4.0"
+  max_capacity = 0.0625
+
+  command {
+    name            = "pythonshell"
+    script_location = "s3://${var.scripts_bucket}/glue_jobs/catalog_ingest.py"
+    python_version  = "3.9"
+  }
+
+  default_arguments = {
+    "--job-language"                     = "python"
+    "--enable-continuous-cloudwatch-log" = "true"
+    "--enable-metrics"                   = "true"
+    "--raw_bucket"                       = var.raw_bucket
+    "--catalog_table"                    = var.songs_table
+    "--TempDir"                          = "s3://${var.scripts_bucket}/tmp/"
+  }
+
+  execution_property { max_concurrent_runs = 1 }
+
+  tags = { Stage = "catalog-ingest" }
+}
+
 # ── CloudWatch Log Groups (pre-created so CI/CD can tail them) ─
 resource "aws_cloudwatch_log_group" "glue_validate" {
   name              = "/aws-glue/jobs/${local.prefix}-validate-${var.environment}"
@@ -153,5 +182,10 @@ resource "aws_cloudwatch_log_group" "glue_ingest" {
 
 resource "aws_cloudwatch_log_group" "glue_archive" {
   name              = "/aws-glue/jobs/${local.prefix}-archive-${var.environment}"
+  retention_in_days = 30
+}
+
+resource "aws_cloudwatch_log_group" "glue_catalog_ingest" {
+  name              = "/aws-glue/jobs/${local.prefix}-catalog-ingest-${var.environment}"
   retention_in_days = 30
 }

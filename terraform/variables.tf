@@ -19,3 +19,9 @@ variable "environment" {
     error_message = "environment must be one of: dev, staging, prod."
   }
 }
+
+variable "sns_email_subscribers" {
+  description = "Email addresses to receive pipeline failure alerts via SNS."
+  type        = list(string)
+  default     = []
+}

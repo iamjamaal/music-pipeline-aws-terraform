@@ -24,6 +24,13 @@ resource "aws_sns_topic" "pipeline_alerts" {
   name = "music-pipeline-alerts-${var.environment}"
 }
 
+resource "aws_sns_topic_subscription" "email_alerts" {
+  for_each  = toset(var.sns_email_subscribers)
+  topic_arn = aws_sns_topic.pipeline_alerts.arn
+  protocol  = "email"
+  endpoint  = each.value
+}
+
 resource "aws_sfn_state_machine" "pipeline" {
   name     = "music-pipeline-${var.environment}"
   role_arn = var.sfn_role_arn
@@ -31,13 +38,14 @@ resource "aws_sfn_state_machine" "pipeline" {
 
   # Load the ASL from the shared JSON file and inject resource names
   definition = templatefile("${path.module}/../../../step_functions/state_machine.json", {
-    validate_job_name  = var.validate_job_name
-    transform_job_name = var.transform_job_name
-    ingest_job_name    = var.ingest_job_name
-    archive_job_name   = var.archive_job_name
-    archive_bucket     = var.archive_bucket
-    environment        = var.environment
-    sns_topic_arn      = aws_sns_topic.pipeline_alerts.arn
+    validate_job_name       = var.validate_job_name
+    transform_job_name      = var.transform_job_name
+    ingest_job_name         = var.ingest_job_name
+    archive_job_name        = var.archive_job_name
+    catalog_ingest_job_name = var.catalog_ingest_job_name
+    archive_bucket          = var.archive_bucket
+    environment             = var.environment
+    sns_topic_arn           = aws_sns_topic.pipeline_alerts.arn
   })
 
   logging_configuration {
@@ -75,7 +83,7 @@ resource "aws_cloudwatch_event_rule" "s3_trigger" {
 resource "aws_cloudwatch_event_target" "sfn_target" {
   rule     = aws_cloudwatch_event_rule.s3_trigger.name
   arn      = aws_sfn_state_machine.pipeline.arn
-  role_arn = var.sfn_role_arn
+  role_arn = var.eventbridge_role_arn
 
   # Transform the EventBridge event into the payload our SFN expects
   input_transformer {

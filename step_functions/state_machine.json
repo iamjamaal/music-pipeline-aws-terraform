@@ -30,7 +30,7 @@
         }
       ],
       "ResultPath": "$.validate_result",
-      "Next": "TransformData"
+      "Next": "IngestCatalog"
     },
     "NotifyValidationFailure": {
       "Type": "Task",
@@ -39,6 +39,41 @@
         "TopicArn": "${sns_topic_arn}",
         "Subject": "Music Pipeline – Validation FAILED",
         "Message.$": "States.Format('Execution {} failed validation. Error: {}', $$.Execution.Name, $.error.Cause)"
+      },
+      "Next": "PipelineFailed"
+    },
+    "IngestCatalog": {
+      "Type": "Task",
+      "Comment": "Python Shell job loads songs.csv into the songs-catalog DynamoDB table. Idempotent: skips if table already populated.",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Parameters": {
+        "JobName": "${catalog_ingest_job_name}"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["Glue.ConcurrentRunsExceededException"],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "NotifyCatalogFailure",
+          "ResultPath": "$.error"
+        }
+      ],
+      "ResultPath": "$.catalog_result",
+      "Next": "TransformData"
+    },
+    "NotifyCatalogFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${sns_topic_arn}",
+        "Subject": "Music Pipeline – Catalog Ingest FAILED",
+        "Message.$": "States.Format('Execution {} failed catalog ingestion. Error: {}', $$.Execution.Name, $.error.Cause)"
       },
       "Next": "PipelineFailed"
     },

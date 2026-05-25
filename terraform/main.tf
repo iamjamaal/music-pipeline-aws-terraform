@@ -87,10 +87,13 @@ module "step_functions" {
   source                        = "./modules/step_functions"
   environment                   = var.environment
   sfn_role_arn                  = module.iam.sfn_role_arn
+  eventbridge_role_arn          = module.iam.eventbridge_role_arn
   validate_job_name             = module.glue.validate_job_name
   transform_job_name            = module.glue.transform_job_name
   ingest_job_name               = module.glue.ingest_job_name
   archive_job_name              = module.glue.archive_job_name
+  catalog_ingest_job_name       = module.glue.catalog_ingest_job_name
   raw_bucket                    = module.s3.raw_bucket_name
   archive_bucket                = module.s3.archive_bucket_name
+  sns_email_subscribers         = var.sns_email_subscribers
 }

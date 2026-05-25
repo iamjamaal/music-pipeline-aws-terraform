@@ -1,0 +1,6 @@
+pytest>=7.4
+pytest-mock>=3.11
+moto[s3,dynamodb]>=4.2
+boto3>=1.26
+pyarrow>=12.0
+pyspark>=3.4

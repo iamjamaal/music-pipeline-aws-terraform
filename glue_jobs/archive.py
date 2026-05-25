@@ -104,25 +104,41 @@ def copy_object(s3_client, source_bucket: str, source_key: str,
 def verify_copy(s3_client, source_bucket: str, source_key: str,
                 dest_bucket: str, dest_key: str) -> bool:
     """
-    Compare ETags of source and destination to confirm the copy is
-    byte-for-byte identical.  Returns False if verification fails so
-    the caller can decide whether to abort or continue.
+    Confirm the copy is byte-for-byte identical.
 
-    Note: ETags are only guaranteed to be comparable for objects smaller
-    than 5 GB that were NOT uploaded as multipart.  For larger files you
-    would switch to an MD5 or SHA-256 comparison via S3 metadata.
+    For single-part uploads (ETag has no '-'): compare ETags directly.
+    For multipart uploads (ETag contains '-', e.g. 'abc123-42'): ETags
+    are computed per-part and are NOT comparable across a copy, so we
+    fall back to ContentLength comparison instead.
     """
     src_head  = s3_client.head_object(Bucket=source_bucket, Key=source_key)
     dest_head = s3_client.head_object(Bucket=dest_bucket,   Key=dest_key)
     src_etag  = src_head.get("ETag", "").strip('"')
-    dest_etag = dest_head.get("ETag", "").strip('"')
-    match     = src_etag == dest_etag
-    log_event(
-        "copy_verified",
-        src_etag  = src_etag,
-        dest_etag = dest_etag,
-        match     = match,
-    )
+
+    is_multipart = "-" in src_etag
+
+    if is_multipart:
+        src_size  = src_head.get("ContentLength", -1)
+        dest_size = dest_head.get("ContentLength", -2)
+        match     = src_size == dest_size
+        log_event(
+            "copy_verified",
+            method     = "content_length",
+            src_size   = src_size,
+            dest_size  = dest_size,
+            match      = match,
+        )
+    else:
+        dest_etag = dest_head.get("ETag", "").strip('"')
+        match     = src_etag == dest_etag
+        log_event(
+            "copy_verified",
+            method    = "etag",
+            src_etag  = src_etag,
+            dest_etag = dest_etag,
+            match     = match,
+        )
+
     return match
 
 

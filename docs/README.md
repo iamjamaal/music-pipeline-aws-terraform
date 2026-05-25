@@ -37,6 +37,8 @@ S3 raw/streams/*.csv
 │                                                   │
 │  [ValidateInput]──fail──▶[NotifyValidationFailure]│
 │        │                                          │
+│  [IngestCatalog]──fail──▶[NotifyCatalogFailure]   │
+│        │                                          │
 │  [TransformData]──fail──▶[NotifyTransformFailure] │
 │        │                                          │
 │  [IngestToDynamoDB]─fail▶[NotifyIngestFailure]    │
@@ -46,7 +48,8 @@ S3 raw/streams/*.csv
 │  [PipelineSucceeded]                              │
 └───────────────────────────────────────────────────┘
         │
-        ├── AWS Glue (PySpark)  →  S3 Parquet (intermediate)
+        ├── AWS Glue (PyShell)  →  DynamoDB songs-catalog (idempotent)
+        ├── AWS Glue (PySpark)  →  S3 Parquet (intermediate KPIs)
         ├── AWS Glue (PyShell)  →  DynamoDB KPI tables
         └── AWS Glue (PyShell)  →  S3 archive bucket
 ```
@@ -69,13 +72,14 @@ music-pipeline/
 │       ├── s3/                 # raw, archive, scripts buckets
 │       ├── dynamodb/           # 4 KPI tables with TTL + PITR
 │       ├── iam/                # Glue and SFN least-privilege roles
-│       ├── glue/               # 4 Glue job definitions
+│       ├── glue/               # 5 Glue job definitions
 │       └── step_functions/     # State machine + EventBridge trigger
 ├── glue_jobs/
 │   ├── validate.py             # Stage 1: column/date/row checks
-│   ├── transform.py            # Stage 2: PySpark KPI computation
-│   ├── ingest.py               # Stage 3: DynamoDB batch writes
-│   └── archive.py              # Stage 4: S3 copy-then-delete
+│   ├── catalog_ingest.py       # Stage 2: songs-catalog DynamoDB loader (idempotent)
+│   ├── transform.py            # Stage 3: PySpark KPI computation
+│   ├── ingest.py               # Stage 4: DynamoDB batch writes
+│   └── archive.py              # Stage 5: S3 copy-then-delete
 ├── step_functions/
 │   └── state_machine.json      # ASL definition (all states + retries)
 ├── scripts/
@@ -337,6 +341,7 @@ Every component writes structured JSON logs (emitted via the `log_event()` helpe
 | Component            | Log Group                                             |
 |----------------------|-------------------------------------------------------|
 | Validate job         | `/aws-glue/jobs/music-pipeline-validate-{env}`        |
+| Catalog ingest job   | `/aws-glue/jobs/music-pipeline-catalog-ingest-{env}`  |
 | Transform job        | `/aws-glue/jobs/music-pipeline-transform-{env}`       |
 | Ingest job           | `/aws-glue/jobs/music-pipeline-ingest-{env}`          |
 | Archive job          | `/aws-glue/jobs/music-pipeline-archive-{env}`         |

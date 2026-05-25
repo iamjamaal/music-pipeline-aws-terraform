@@ -137,3 +137,36 @@ resource "aws_iam_role_policy" "sfn_custom" {
     ]
   })
 }
+
+# ── EventBridge IAM Role ───────────────────────────────────
+# Separate role for EventBridge to invoke Step Functions.
+# The SFN execution role (above) uses states.amazonaws.com as principal;
+# EventBridge needs its own role with events.amazonaws.com as principal
+# and states:StartExecution permission on the state machine.
+resource "aws_iam_role" "eventbridge" {
+  name = "music-pipeline-eventbridge-${var.environment}"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "events.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "eventbridge_sfn" {
+  name = "music-pipeline-eventbridge-sfn-${var.environment}"
+  role = aws_iam_role.eventbridge.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "StartSFNExecution"
+      Effect   = "Allow"
+      Action   = "states:StartExecution"
+      Resource = "arn:aws:states:${local.region}:${local.account_id}:stateMachine:music-pipeline-*"
+    }]
+  })
+}
