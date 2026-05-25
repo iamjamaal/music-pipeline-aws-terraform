@@ -43,7 +43,7 @@ concurrency:
   cancel-in-progress: false   # never cancel an in-progress apply
 
 env:
-  TF_VERSION:   "1.7.5"
+  TF_VERSION:   "1.11.4"
   AWS_REGION:   ${{ secrets.AWS_REGION || 'us-east-1' }}
   ENVIRONMENT:  ${{ github.ref == 'refs/heads/main' && 'dev' || 'dev' }}
   # Override ENVIRONMENT per branch in a multi-env setup:
